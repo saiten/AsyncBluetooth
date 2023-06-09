@@ -152,6 +152,12 @@ public class CentralManager {
     public func retrieveConnectedPeripherals(withServices serviceUUIDs: [CBUUID]) -> [Peripheral] {
         self.cbCentralManager.retrieveConnectedPeripherals(withServices: serviceUUIDs).map { Peripheral($0) }
     }
+    
+    public func registerForConnectionEvents(options: [CBConnectionEventMatchingOption : Any]) {
+        #if os(iOS)
+        self.cbCentralManager.registerForConnectionEvents(options: options)
+        #endif
+    }
 
     /// Returns a Boolean that indicates whether the device supports a specific set of features.
     @available(macOS, unavailable)
@@ -299,4 +305,14 @@ extension CentralManager.DelegateWrapper: CBCentralManagerDelegate {
             )
         }
     }
+    #if os(iOS)
+    func centralManager(_ central: CBCentralManager, connectionEventDidOccur event: CBConnectionEvent, for peripheral: CBPeripheral) {
+        Task {
+            Self.logger.info("Connection event occur from \(peripheral.identifier)")
+            self.context.eventSubject.send(
+                .connctionEventDidOccur(event: event, peripheral: Peripheral(peripheral))
+            )
+        }
+    }
+    #endif
 }
