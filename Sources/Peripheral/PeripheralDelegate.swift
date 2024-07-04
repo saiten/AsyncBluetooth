@@ -5,10 +5,10 @@ import CoreBluetooth
 import os.log
 
 class PeripheralDelegate: NSObject {
-    private static let logger = Logger(
-        subsystem: Bundle(for: PeripheralDelegate.self).bundleIdentifier ?? "",
-        category: "peripheralDelegate"
-    )
+    
+    private static var logger: Logger {
+        Logging.logger(for: "peripheralDelegate")
+    }
 
     let context = PeripheralContext()
 }
@@ -67,10 +67,8 @@ extension PeripheralDelegate: CBPeripheralDelegate {
     func peripheral(_ cbPeripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         
         if characteristic.isNotifying {
-           
            // characteristic.value is Data() and it will get trampled if allowed to run async.
            self.context.characteristicValueUpdatedSubject.send( Characteristic(characteristic) )
-
         }
            
         Task {
@@ -168,5 +166,9 @@ extension PeripheralDelegate: CBPeripheralDelegate {
                 Self.logger.warning("Received OpenChannel result without a continuation")
             }
         }
+    }
+    
+    func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
+        self.context.invalidatedServicesSubject.send(invalidatedServices.map { Service($0) })
     }
 }

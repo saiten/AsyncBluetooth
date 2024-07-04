@@ -101,6 +101,57 @@ peripheral.characteristicValueUpdatedPublisher
     .store(in: &cancellables)
 ```
 
+Remember that you should enable notifications on that characteristic to receive updated values.
+
+```swift
+try await peripheral.setNotifyValue(true, characteristicUUID, serviceUUID)
+```
+
+### Canceling operations
+
+To cancel a specific operation, you can wrap your call in a `Task`:
+
+```swift
+let fetchTask = Task {
+    do {
+        return try await peripheral.readValue(
+            forCharacteristicWithUUID: UUID(uuidString: "")!,
+            ofServiceWithUUID: UUID(uuidString: "")!
+        )
+    } catch {
+        return ""
+    }
+}
+
+fetchTask.cancel()
+```
+
+There might also be cases were you want to stop awaiting for all responses. For example, when bluetooth has been powered off. This can be done like so:
+
+```swift
+centralManager.eventPublisher
+    .sink {
+        switch $0 {
+        case .didUpdateState(let state):
+            guard state == .poweredOff else {
+                return
+            }
+            centralManager.cancelAllOperations()
+            peripheral.cancelAllOperations()
+        default:
+            break
+        }
+    }
+    .store(in: &cancellables)
+```
+
+### Logging
+
+The library uses `os.log` to provide logging for several operations. These logs are enabled by default. If you wish to disable them, you can do:
+
+```
+AsyncBluetoothLogging.isEnabled = false
+```
 
 ## Examples
 
@@ -119,7 +170,7 @@ to your Package Dependencies.
 - iOS 14.0+
 - MacOS 11.0+
 - Swift 5
-- Xcoce 13.2.1+
+- Xcode 13.2.1+
 
 ## License
 

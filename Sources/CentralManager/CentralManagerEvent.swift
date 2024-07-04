@@ -9,4 +9,5 @@ public enum CentralManagerEvent {
     case didConnectPeripheral(peripheral: Peripheral)
     case didDisconnectPeripheral(peripheral: Peripheral, error: Error?)
     case connctionEventDidOccur(event: CBConnectionEvent, peripheral: Peripheral)
+    case didDisconnectPeripheral(peripheral: Peripheral, isReconnecting: Bool = false, error: Error?)
 }

@@ -8,6 +8,10 @@ import os.log
 /// An object that scans for, discovers, connects to, and manages peripherals using concurrency.
 public class CentralManager {
     
+    public static func test() {
+        logger.log("WHATS UP!?")
+    }
+    
     private typealias Utils = CentralManagerUtils
     
     fileprivate class DelegateWrapper: NSObject {
@@ -18,10 +22,9 @@ public class CentralManager {
         }
     }
     
-    private static let logger = Logger(
-        subsystem: Bundle(for: CentralManager.self).bundleIdentifier ?? "",
-        category: "centralManager"
-    )
+    private static var logger: Logger {
+        Logging.logger(for: "centralManager")
+    }
     
     public var bluetoothState: CBManagerState {
         self.cbCentralManager.state
@@ -56,7 +59,16 @@ public class CentralManager {
         guard let isBluetoothReadyResult = Utils.isBluetoothReady(self.bluetoothState) else {
             Self.logger.info("Waiting for bluetooth to be ready...")
             
-            try await self.context.waitUntilReadyExecutor.enqueue {}
+            try await self.context.waitUntilReadyExecutor.enqueue { [weak self] in
+                // Note we need to check again here in case the Bluetooth state was updated after we last
+                // checked but before the work was enqueued. Otherwise we could wait indefinitely.
+                guard let self = self, let isBluetoothReadyResult = Utils.isBluetoothReady(self.bluetoothState) else {
+                    return
+                }
+                Task {
+                    await self.context.waitUntilReadyExecutor.flush(isBluetoothReadyResult)
+                }
+            }
             return
         }
 
@@ -75,8 +87,17 @@ public class CentralManager {
     ) async throws -> AsyncStream<ScanData> {
         try await withCheckedThrowingContinuation { continuation in
             Task {
+                // Note that the enqueue call will remain awaiting until the stream is terminated. This
+                // means that we can end up in a state were the continuation is used to send the stream,
+                // and yet we want to throw an error (e.g. calling `cancelAllOperations` while scanning).
+                // To avoid crashing, we check whether the continuation has been used before.
+                var isContinuationUsed = false
+                
                 do {
                     try await self.context.scanForPeripheralsExecutor.enqueue {
+                        guard !isContinuationUsed else { return }
+                        isContinuationUsed = true
+                        
                         let scanDataStream = self.createScanDataStream(
                             withServices: serviceUUIDs,
                             options: options
@@ -84,6 +105,9 @@ public class CentralManager {
                         continuation.resume(returning: scanDataStream)
                     }
                 } catch {
+                    guard !isContinuationUsed else { return }
+                    isContinuationUsed = true
+                    
                     continuation.resume(throwing: error)
                 }
             }
@@ -159,6 +183,15 @@ public class CentralManager {
         #endif
     }
 
+    /// Cancels all pending operations, stops scanning and awaiting for any responses.
+    /// - Note: Operation for Peripherals will not be cancelled. To do that, call `cancelAllOperations()` on the `Peripheral`.
+    public func cancelAllOperations() async throws {
+        if isScanning {
+            await self.stopScan()
+        }
+        try await self.context.flush(error: BluetoothError.operationCancelled)
+    }
+
     /// Returns a Boolean that indicates whether the device supports a specific set of features.
     @available(macOS, unavailable)
     public static func supports(_ features: CBCentralManager.Feature) -> Bool {
@@ -166,7 +199,7 @@ public class CentralManager {
     }
     
     /// Creates the async stream where scan data will get added as part of scanning for peripherals.
-    /// - Note: The stream is responsable for starting scan.
+    /// - Note: The stream is responsible for starting scan.
     private func createScanDataStream(
         withServices serviceUUIDs: [CBUUID]?,
         options: [String : Any]? = nil
@@ -285,6 +318,30 @@ extension CentralManager.DelegateWrapper: CBCentralManagerDelegate {
     }
     
     func centralManager(
+        _ central: CBCentralManager,
+        didDisconnectPeripheral peripheral: CBPeripheral,
+        timestamp: CFAbsoluteTime,
+        isReconnecting: Bool,
+        error: Error?
+    ) {
+        Task {
+            do {
+                let result = CallbackUtils.result(for: (), error: error)
+                try await self.context.cancelPeripheralConnectionExecutor.setWorkCompletedForKey(
+                    peripheral.identifier, result: result
+                )
+                Self.logger.info("Disconnected from \(peripheral.identifier)")
+            } catch {
+                Self.logger.info("Disconnected from \(peripheral.identifier) without a continuation")
+            }
+            
+            self.context.eventSubject.send(
+                .didDisconnectPeripheral(peripheral: Peripheral(peripheral), isReconnecting: isReconnecting, error: error)
+            )
+        }
+    }
+    
+    func centralManager(
         _ cbCentralManager: CBCentralManager,
         didDisconnectPeripheral peripheral: CBPeripheral,
         error: Error?
@@ -301,7 +358,7 @@ extension CentralManager.DelegateWrapper: CBCentralManagerDelegate {
             }
             
             self.context.eventSubject.send(
-                .didDisconnectPeripheral(peripheral: Peripheral(peripheral), error: error)
+                .didDisconnectPeripheral(peripheral: Peripheral(peripheral), isReconnecting: false, error: error)
             )
         }
     }
